@@ -1,3 +1,10 @@
+process.on('uncaughtException', (err) => {
+  console.error('Unhandled Error:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection:', reason);
+});
+
 const express = require('express');
 const app = express();
 
