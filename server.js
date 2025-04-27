@@ -4,18 +4,23 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Test route
+// Root route
 app.get('/', (req, res) => {
-  res.send('PriceDrop App Backend Working!');
+  res.send('PriceDrop App Backend is now Working!');
 });
 
-// Example route to track product
+// Track product route
 app.post('/track-product', (req, res) => {
   const { productUrl, productName, price } = req.body;
-  // Just dummy response for now
-  res.status(201).json({ message: 'Product tracked successfully!', productUrl, productName, price });
+  res.status(201).json({
+    message: 'Product tracked successfully!',
+    productUrl,
+    productName,
+    price
+  });
 });
 
+// Start server
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`Server started successfully on port ${PORT}`);
 });
