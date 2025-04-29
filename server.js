@@ -38,9 +38,16 @@ const Product = mongoose.model('Product', productSchema);
 app.use(express.json());
 
 // Test Route
-app.get('/', (req, res) => {
-  res.status(200).send('PriceDrop App Backend is Working Now with MongoDB!');
+app.get('/products', async (req, res) => {
+  try {
+    const products = await Product.find().sort({ createdAt: -1 });
+    res.json(products);
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 });
+
 
 // Track Product Route
 app.post('/track-product', async (req, res) => {
