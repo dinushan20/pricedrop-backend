@@ -13,7 +13,7 @@ process.on('unhandledRejection', (reason, promise) => {
 const PORT = process.env.PORT || 3000;
 
 // MongoDB Connection
-const MONGO_URI = "mongodb+srv://dinushanpricedrop:2VUR5%7C8UlaT3T4nP@pricedrop.2ngimi2.mongodb.net/?retryWrites=true&w=majority&appName=pricedrop";
+const MONGO_URI = "mongodb+srv://dinushanpricedrop:2VUR5|8UlaT3T4nP@pricedrop.2ngimi2.mongodb.net/?retryWrites=true&w=majority&appName=pricedrop";
 
 mongoose.connect(MONGO_URI, {
   useNewUrlParser: true,
