@@ -1,3 +1,8 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const app = express();
+
+// Handle unexpected errors
 process.on('uncaughtException', (err) => {
   console.error('Unhandled Error:', err);
 });
@@ -5,32 +10,56 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection:', reason);
 });
 
-const express = require('express');
-const app = express();
-
-// Important: Choreo requires listening on 0.0.0.0
 const PORT = process.env.PORT || 3000;
+
+// MongoDB Connection
+const MONGO_URI = "mongodb+srv://dinushanpricedrop:<2VUR5|8UlaT3T4nP>@pricedrop.2ngimi2.mongodb.net/?retryWrites=true&w=majority&appName=pricedrop";
+
+mongoose.connect(MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => console.log('MongoDB connected'))
+.catch((err) => console.error('MongoDB connection error:', err));
+
+// Product Schema
+const productSchema = new mongoose.Schema({
+  productUrl: String,
+  productName: String,
+  price: Number,
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Product = mongoose.model('Product', productSchema);
 
 app.use(express.json());
 
-// Test route
+// Test Route
 app.get('/', (req, res) => {
-  res.status(200).send('PriceDrop App Backend is Working Now');
+  res.status(200).send('PriceDrop App Backend is Working Now with MongoDB!');
 });
 
-// Track Product route
-app.post('/track-product', (req, res) => {
+// Track Product Route
+app.post('/track-product', async (req, res) => {
   const { productUrl, productName, price } = req.body;
+
   if (!productUrl || !productName || !price) {
     return res.status(400).json({ message: 'Missing required fields.' });
   }
 
-  res.status(201).json({
-    message: 'Product tracked successfully',
-    productUrl,
-    productName,
-    price
-  });
+  try {
+    const newProduct = new Product({ productUrl, productName, price });
+    await newProduct.save();
+    res.status(201).json({
+      message: 'Product saved to database successfully',
+      productUrl,
+      productName,
+      price
+    });
+  } catch (error) {
+    console.error('Error saving product:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 });
 
 // Start server
