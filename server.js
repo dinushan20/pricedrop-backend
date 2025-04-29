@@ -4,6 +4,7 @@ const cors = require('cors');
 const app = express();
 
 app.use(cors());
+app.use(express.json());
 
 // Handle unexpected errors
 process.on('uncaughtException', (err) => {
@@ -29,15 +30,16 @@ mongoose.connect(MONGO_URI, {
 const productSchema = new mongoose.Schema({
   productUrl: String,
   productName: String,
+  productImage: String, // ✅ added field
   price: Number,
   createdAt: { type: Date, default: Date.now }
 });
 
 const Product = mongoose.model('Product', productSchema);
 
-app.use(express.json());
+// Routes
 
-// Test Route
+// GET all products
 app.get('/products', async (req, res) => {
   try {
     const products = await Product.find().sort({ createdAt: -1 });
@@ -48,26 +50,37 @@ app.get('/products', async (req, res) => {
   }
 });
 
-
-// Track Product Route
+// POST: track a new product
 app.post('/track-product', async (req, res) => {
-  const { productUrl, productName, price } = req.body;
+  const { productUrl, productName, productImage, price } = req.body;
 
   if (!productUrl || !productName || !price) {
     return res.status(400).json({ message: 'Missing required fields.' });
   }
 
   try {
-    const newProduct = new Product({ productUrl, productName, price });
+    const newProduct = new Product({ productUrl, productName, productImage, price });
     await newProduct.save();
     res.status(201).json({
       message: 'Product saved to database successfully',
       productUrl,
       productName,
+      productImage,
       price
     });
   } catch (error) {
     console.error('Error saving product:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// DELETE: remove product by ID
+app.delete('/product/:id', async (req, res) => {
+  try {
+    await Product.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Product deleted' });
+  } catch (error) {
+    console.error('Delete failed:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
