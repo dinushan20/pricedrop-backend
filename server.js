@@ -24,7 +24,10 @@ let retryCount = 0;
 const connectDB = async () => {
   try {
     console.log(`Attempting MongoDB connection (attempt ${retryCount + 1})...`);
-    
+
+    // Log the raw value
+    console.log("MONGODB_URI:", process.env.MONGODB_URI);
+
     await mongoose.connect(process.env.MONGODB_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
@@ -36,7 +39,7 @@ const connectDB = async () => {
     });
 
     console.log('MongoDB connected successfully');
-    retryCount = 0; // Reset retry counter on success
+    retryCount = 0;
   } catch (err) {
     console.error('MongoDB connection error:', err.message);
     
@@ -50,6 +53,7 @@ const connectDB = async () => {
     }
   }
 };
+
 
 // Connection event handlers
 mongoose.connection.on('connected', () => {
