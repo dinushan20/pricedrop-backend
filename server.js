@@ -27,7 +27,7 @@ app.get('/', (req, res) => {
 // MongoDB Connection
 const PORT = process.env.PORT || 3000;
 // Update your MongoDB connection with better error handling
-mongoose.connect(process.env.MONGO_URI, {
+mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
   retryWrites: true,
