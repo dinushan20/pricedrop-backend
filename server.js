@@ -1,32 +1,30 @@
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const cors = require('cors');
 const nodemailer = require('nodemailer');
 
 const app = express();
-app.use(cors());
+
+// Enhanced CORS
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
-// Global CORS Headers Middleware
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  next();
-});
-
-// Test route
+// Health check endpoint
 app.get('/', (req, res) => {
-  res.send('PriceDrop Backend is running');
+  res.json({ status: 'API is running' });
 });
-
-const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGODB_URI;
 
 // MongoDB connection
+const PORT = process.env.PORT || 3000;
+const MONGO_URI = process.env.MONGODB_URI;
 mongoose.connect(MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true
@@ -46,17 +44,15 @@ const transporter = nodemailer.createTransport({
 // User Schema
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now }
-});
+  password: { type: String, required: true }
+}, { timestamps: true });
 const User = mongoose.model('User', userSchema);
 
 // Price History Schema
 const priceHistorySchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
-  price: Number,
-  createdAt: { type: Date, default: Date.now }
-});
+  price: Number
+}, { timestamps: true });
 const PriceHistory = mongoose.model('PriceHistory', priceHistorySchema);
 
 // Product Schema
@@ -66,7 +62,6 @@ const productSchema = new mongoose.Schema({
   productImage: String,
   currentPrice: { type: Number, required: true },
   targetPrice: { type: Number, required: true },
-  createdAt: { type: Date, default: Date.now },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   similarProducts: [
     {
@@ -75,7 +70,7 @@ const productSchema = new mongoose.Schema({
       url: String
     }
   ]
-});
+}, { timestamps: true });
 const Product = mongoose.model('Product', productSchema);
 
 // Authentication Middleware
@@ -93,13 +88,15 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-// User Registration
+// Registration
 app.post('/register', async (req, res) => {
   try {
     const { email, password } = req.body;
-
     if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
+      return res.status(400).json({
+        error: 'Email and password are required',
+        details: { received: req.body }
+      });
     }
 
     const existingUser = await User.findOne({ email });
@@ -123,7 +120,7 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// User Login
+// Login
 app.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -140,7 +137,7 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// GET all products for a user
+// Get all user products
 app.get('/products', authenticate, async (req, res) => {
   try {
     const products = await Product.find({ userId: req.user._id }).sort({ createdAt: -1 });
@@ -150,7 +147,7 @@ app.get('/products', authenticate, async (req, res) => {
   }
 });
 
-// POST: track a new product
+// Track a product
 app.post('/track-product', authenticate, async (req, res) => {
   try {
     const { productUrl, productName, productImage, currentPrice, targetPrice } = req.body;
@@ -175,11 +172,7 @@ app.post('/track-product', authenticate, async (req, res) => {
     });
 
     await product.save();
-
-    await new PriceHistory({
-      productId: product._id,
-      price: currentPrice
-    }).save();
+    await new PriceHistory({ productId: product._id, price: currentPrice }).save();
 
     res.status(201).json({ product, similarProducts });
   } catch (error) {
@@ -187,7 +180,7 @@ app.post('/track-product', authenticate, async (req, res) => {
   }
 });
 
-// GET: compare prices for a product
+// Compare prices
 app.get('/compare-prices/:productId', authenticate, async (req, res) => {
   try {
     const product = await Product.findById(req.params.productId);
@@ -204,7 +197,7 @@ app.get('/compare-prices/:productId', authenticate, async (req, res) => {
   }
 });
 
-// PATCH: update product price & notify if target reached
+// Update product price
 app.patch('/product/:id', authenticate, async (req, res) => {
   try {
     const { currentPrice } = req.body;
@@ -217,11 +210,7 @@ app.patch('/product/:id', authenticate, async (req, res) => {
 
     product.currentPrice = currentPrice;
     await product.save();
-
-    await new PriceHistory({
-      productId: product._id,
-      price: currentPrice
-    }).save();
+    await new PriceHistory({ productId: product._id, price: currentPrice }).save();
 
     if (currentPrice <= product.targetPrice) {
       const user = await User.findById(req.user._id);
@@ -242,34 +231,33 @@ app.patch('/product/:id', authenticate, async (req, res) => {
   }
 });
 
-// DELETE product
-app.delete('/product/:id', authenticate, async (req, res, next) => {
+// Delete product
+app.delete('/product/:id', authenticate, async (req, res) => {
   try {
     const deleted = await Product.findOneAndDelete({
       _id: req.params.id,
       userId: req.user._id
     });
-    if (!deleted) {
-      return res.status(404).json({ message: 'Product not found or unauthorized' });
-    }
+    if (!deleted) return res.status(404).json({ message: 'Product not found or unauthorized' });
+
     res.json({ message: 'Product deleted successfully' });
   } catch (error) {
-    next(error);
+    res.status(500).json({ message: 'Error deleting product', error: error.message });
   }
 });
 
-// Error middleware
+// Generic error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ message: 'Something broke!' });
 });
 
-// Server listener
+// Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Process error handlers
+// Error listeners
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
   process.exit(1);
