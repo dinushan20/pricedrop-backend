@@ -17,45 +17,74 @@ app.use(cors({
 
 app.use(express.json());
 
-// Health Check Endpoint
-app.get('/health', (req, res) => {
-  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-  res.json({ 
-    status: 'API is running', 
-    database: dbStatus,
-    timestamp: new Date() 
-  });
-});
+// MongoDB Connection with Robust Error Handling
+const MAX_RETRIES = 3;
+let retryCount = 0;
 
-// MongoDB Connection with improved settings
-const connectWithRetry = () => {
-  console.log('Attempting MongoDB connection...');
-  mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 30000,
-    retryWrites: true,
-    retryReads: true
-  })
-  .then(() => console.log('MongoDB connected successfully'))
-  .catch(err => {
+const connectDB = async () => {
+  try {
+    console.log(`Attempting MongoDB connection (attempt ${retryCount + 1})...`);
+    
+    await mongoose.connect(process.env.MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+      maxPoolSize: 10,
+      retryWrites: true,
+      retryReads: true
+    });
+
+    console.log('MongoDB connected successfully');
+    retryCount = 0; // Reset retry counter on success
+  } catch (err) {
     console.error('MongoDB connection error:', err.message);
-    console.log('Retrying connection in 5 seconds...');
-    setTimeout(connectWithRetry, 5000);
-  });
+    
+    if (retryCount < MAX_RETRIES) {
+      retryCount++;
+      console.log(`Retrying connection in 5 seconds... (${retryCount}/${MAX_RETRIES})`);
+      setTimeout(connectDB, 5000);
+    } else {
+      console.error('Max retries reached. Exiting...');
+      process.exit(1);
+    }
+  }
 };
 
-connectWithRetry();
-
 // Connection event handlers
-mongoose.connection.on('connecting', () => console.log('Connecting to MongoDB...'));
-mongoose.connection.on('connected', () => console.log('MongoDB connected'));
-mongoose.connection.on('disconnected', () => {
-  console.log('MongoDB disconnected. Attempting to reconnect...');
-  connectWithRetry();
+mongoose.connection.on('connected', () => {
+  console.log('Mongoose connected to DB');
+  app.emit('dbReady'); // Emit event when DB is ready
 });
-mongoose.connection.on('error', (err) => console.error('MongoDB connection error:', err));
+
+mongoose.connection.on('error', (err) => {
+  console.error('Mongoose connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.log('Mongoose disconnected');
+});
+
+// Health Check Endpoint
+app.get('/health', async (req, res) => {
+  try {
+    // Test DB connection
+    await mongoose.connection.db.admin().ping();
+    
+    res.json({
+      status: 'OK',
+      dbStatus: 'connected',
+      uptime: process.uptime(),
+      timestamp: new Date()
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: 'Service Unavailable',
+      dbStatus: 'disconnected',
+      error: err.message
+    });
+  }
+});
 
 // Models
 const userSchema = new mongoose.Schema({
@@ -270,6 +299,11 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.on('dbReady', () => {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
 });
+
+// Initial connection attempt
+connectDB();
