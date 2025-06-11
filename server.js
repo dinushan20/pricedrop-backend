@@ -100,15 +100,7 @@ const productSchema = new mongoose.Schema({
 });
 
 const User = mongoose.model('User', userSchema);
-
-const Product = mongoose.model('Product', new mongoose.Schema({
-  productName: { type: String, required: true },
-  productUrl: { type: String, required: true },
-  productImage: String,
-  currentPrice: { type: Number, required: true },
-  targetPrice: { type: Number, required: true },
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
-}, { timestamps: true }));
+const Product = mongoose.model('Product', productSchema);
 
 // Auth Middleware
 const authenticate = async (req, res, next) => {
