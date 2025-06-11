@@ -29,14 +29,13 @@ const PORT = process.env.PORT || 3000;
 // Update your MongoDB connection with better error handling
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
-  useUnifiedTopology: true,
-  retryWrites: true,
-  w: 'majority'
-})
-.then(() => console.log('MongoDB connected successfully'))
-.catch(err => {
+  useUnifiedTopology: true
+});
+mongoose.connection.on('error', (err) => {
   console.error('MongoDB connection error:', err);
-  process.exit(1); // Exit if DB connection fails
+});
+mongoose.connection.once('open', () => {
+  console.log('Connected to MongoDB');
 });
 
 // Models
