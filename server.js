@@ -417,35 +417,6 @@ app.get('/price-history/:productId', authenticate, async (req, res) => {
 });
 
 
-// server.js - Add this new endpoint
-app.get('/products/sorted', authenticate, async (req, res) => {
-  try {
-    const products = await Product.find({ userId: req.user._id }).maxTimeMS(10000);
-    
-    // Sort products: target reached first, then by price drop percentage
-    const sortedProducts = products.sort((a, b) => {
-      const aReached = a.currentPrice <= a.targetPrice;
-      const bReached = b.currentPrice <= b.targetPrice;
-      
-      if (aReached && !bReached) return -1;
-      if (!aReached && bReached) return 1;
-      
-      // Both reached or both not reached - sort by price drop percentage
-      const aDrop = (a.currentPrice - a.targetPrice) / a.targetPrice;
-      const bDrop = (b.currentPrice - b.targetPrice) / b.targetPrice;
-      return aDrop - bDrop;
-    });
-    
-    res.json(sortedProducts);
-  } catch (err) {
-    res.status(500).json({ 
-      error: 'Failed to fetch products',
-      code: 'SERVER_ERROR'
-    });
-  }
-});
-
-
 // Error Handling Middleware
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
