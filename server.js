@@ -4,8 +4,11 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const nodemailer = require('nodemailer');
 
 const app = express();
+
+require('dotenv').config();
 
 // Enhanced CORS Configuration
 app.use(cors({
@@ -89,6 +92,26 @@ app.get('/health', async (req, res) => {
     });
   }
 });
+
+// Configure email transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
+
+
+// Add this to the product schema
+productSchema.add({
+  productImage: String,
+  notificationSent: {
+    type: Boolean,
+    default: false
+  }
+});
+
 
 // Models
 const userSchema = new mongoose.Schema({
@@ -292,6 +315,135 @@ app.post('/track-product', authenticate, async (req, res) => {
     });
   }
 });
+
+
+// Update product price
+app.patch('/product/:id', authenticate, async (req, res) => {
+  try {
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { currentPrice: req.body.currentPrice },
+      { new: true }
+    );
+    res.json(product);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
+// Delete product
+app.delete('/product/:id', authenticate, async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    // Get user email
+    const user = await User.findById(product.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Delete the product
+    await Product.findByIdAndDelete(req.params.id);
+
+    // Send email notification
+    await sendDeleteNotificationEmail(user.email, product.productName);
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete product' });
+  }
+});
+
+const sendDeleteNotificationEmail = async (userEmail, productName) => {
+  try {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+      }
+    });
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: userEmail,
+      subject: `Product Tracking Stopped: ${productName}`,
+      text: `You have stopped tracking ${productName}.`,
+      html: `<p>You have stopped tracking <strong>${productName}</strong>.</p>`
+    };
+
+    await transporter.sendMail(mailOptions);
+  } catch (error) {
+    console.error('Error sending delete notification email:', error);
+  }
+};
+
+// Price history tracking
+const priceHistorySchema = new mongoose.Schema({
+  productId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product'
+  },
+  price: Number,
+  date: {
+    type: Date,
+    default: Date.now
+  }
+});
+const PriceHistory = mongoose.model('PriceHistory', priceHistorySchema);
+
+app.post('/price-history', authenticate, async (req, res) => {
+  try {
+    const history = new PriceHistory(req.body);
+    await history.save();
+    res.status(201).json(history);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save price history' });
+  }
+});
+
+app.get('/price-history/:productId', authenticate, async (req, res) => {
+  try {
+    const history = await PriceHistory.find({ productId: req.params.productId })
+      .sort({ date: -1 })
+      .limit(30);
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch price history' });
+  }
+});
+
+// server.js - Add this new endpoint
+app.get('/products/sorted', authenticate, async (req, res) => {
+  try {
+    const products = await Product.find({ userId: req.user._id }).maxTimeMS(10000);
+    
+    // Sort products: target reached first, then by price drop percentage
+    const sortedProducts = products.sort((a, b) => {
+      const aReached = a.currentPrice <= a.targetPrice;
+      const bReached = b.currentPrice <= b.targetPrice;
+      
+      if (aReached && !bReached) return -1;
+      if (!aReached && bReached) return 1;
+      
+      // Both reached or both not reached - sort by price drop percentage
+      const aDrop = (a.currentPrice - a.targetPrice) / a.targetPrice;
+      const bDrop = (b.currentPrice - b.targetPrice) / b.targetPrice;
+      return aDrop - bDrop;
+    });
+    
+    res.json(sortedProducts);
+  } catch (err) {
+    res.status(500).json({ 
+      error: 'Failed to fetch products',
+      code: 'SERVER_ERROR'
+    });
+  }
+});
+
 
 // Error Handling Middleware
 app.use((err, req, res, next) => {
