@@ -416,6 +416,7 @@ app.get('/price-history/:productId', authenticate, async (req, res) => {
   }
 });
 
+
 // server.js - Add this new endpoint
 app.get('/products/sorted', authenticate, async (req, res) => {
   try {
