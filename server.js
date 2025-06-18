@@ -20,6 +20,16 @@ app.use(cors({
 
 app.use(express.json());
 
+// Add this to the product schema
+productSchema.add({
+  productImage: String,
+  notificationSent: {
+    type: Boolean,
+    default: false
+  }
+});
+
+
 // MongoDB Connection with Robust Error Handling
 const MAX_RETRIES = 3;
 let retryCount = 0;
@@ -103,14 +113,6 @@ const transporter = nodemailer.createTransport({
 });
 
 
-// Add this to the product schema
-productSchema.add({
-  productImage: String,
-  notificationSent: {
-    type: Boolean,
-    default: false
-  }
-});
 
 
 // Models
