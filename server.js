@@ -20,16 +20,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// Add this to the product schema
-productSchema.add({
-  productImage: String,
-  notificationSent: {
-    type: Boolean,
-    default: false
-  }
-});
-
-
 // MongoDB Connection with Robust Error Handling
 const MAX_RETRIES = 3;
 let retryCount = 0;
@@ -66,7 +56,6 @@ const connectDB = async () => {
     }
   }
 };
-
 
 // Connection event handlers
 mongoose.connection.on('connected', () => {
@@ -112,9 +101,6 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-
-
-
 // Models
 const userSchema = new mongoose.Schema({
   email: {
@@ -148,6 +134,15 @@ const productSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  }
+});
+
+// Add additional fields to product schema
+productSchema.add({
+  productImage: String,
+  notificationSent: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -317,7 +312,6 @@ app.post('/track-product', authenticate, async (req, res) => {
     });
   }
 });
-
 
 // Update product price
 app.patch('/product/:id', authenticate, async (req, res) => {
