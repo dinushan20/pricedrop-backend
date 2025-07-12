@@ -313,12 +313,59 @@ app.post('/track-product', authenticate, async (req, res) => {
   }
 });
 
+// Add to product schema
+productSchema.add({
+  lastChecked: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Add new endpoints
+app.post('/send-price-alert', authenticate, async (req, res) => {
+  try {
+    const { to, subject, text, html } = req.body;
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to,
+      subject,
+      text,
+      html
+    };
+
+    await transporter.sendMail(mailOptions);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Email sending error:', error);
+    res.status(500).json({ error: 'Failed to send email' });
+  }
+});
+
+app.get('/products/pending-notifications', authenticate, async (req, res) => {
+  try {
+    const products = await Product.find({
+      userId: req.user._id,
+      currentPrice: { $lte: '$targetPrice' },
+      notificationSent: false
+    });
+    res.json(products);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch pending notifications' });
+  }
+});
+
 // Update product price
 app.patch('/product/:id', authenticate, async (req, res) => {
   try {
+    const updateData = {
+      ...req.body,
+      lastChecked: new Date()
+    };
+    
     const product = await Product.findByIdAndUpdate(
       req.params.id,
-      { currentPrice: req.body.currentPrice },
+      updateData,
       { new: true }
     );
     res.json(product);
