@@ -187,12 +187,11 @@ app.get('/health', async (req, res) => {
 });
 
 // Configure email transporter with better error handling
-let transporter = null;
-
 const initializeEmailTransporter = () => {
   try {
     if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-      transporter = nodemailer.createTransporter({
+      // FIXED: Changed createTransporter to createTransport
+      transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: {
           user: process.env.EMAIL_USER,
@@ -767,7 +766,7 @@ app.get('/products/pending-notifications', authenticate, checkDBConnection, asyn
       {
         $sort: { createdAt: -1 }
       }
-    ]).maxTimeMS(10000);
+    ]);
     
     res.json(products);
   } catch (err) {
