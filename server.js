@@ -46,8 +46,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// MongoDB Connection with Enhanced Error Handling
-const MAX_RETRIES = 5;
+// MongoDB Connection with Fixed Options
+const MAX_RETRIES = 3;
 let retryCount = 0;
 let isConnected = false;
 
@@ -59,21 +59,19 @@ const connectDB = async () => {
       throw new Error('MONGODB_URI environment variable is not set');
     }
 
-    // Enhanced connection options
+    // FIXED: Removed unsupported options
     const options = {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 15000, // Increased timeout
+      serverSelectionTimeoutMS: 10000,
       socketTimeoutMS: 45000,
-      maxPoolSize: 20, // Increased pool size
-      minPoolSize: 5,
+      maxPoolSize: 10,
       retryWrites: true,
       retryReads: true,
-      bufferCommands: false,
-      bufferMaxEntries: 0,
       connectTimeoutMS: 30000,
       heartbeatFrequencyMS: 10000,
       maxIdleTimeMS: 30000
+      // REMOVED: bufferCommands, bufferMaxEntries (these are not valid connection options)
     };
 
     await mongoose.connect(process.env.MONGODB_URI, options);
@@ -92,12 +90,11 @@ const connectDB = async () => {
     
     if (retryCount < MAX_RETRIES) {
       retryCount++;
-      const delay = Math.min(1000 * Math.pow(2, retryCount), 30000); // Exponential backoff
+      const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
       console.log(`⏳ Retrying connection in ${delay/1000} seconds... (${retryCount}/${MAX_RETRIES})`);
       setTimeout(connectDB, delay);
     } else {
       console.error('💥 Max retries reached. Server will continue without database.');
-      // Don't exit, let the server handle database unavailable scenarios
     }
   }
 };
@@ -119,7 +116,7 @@ mongoose.connection.on('disconnected', () => {
   
   // Attempt to reconnect after disconnection
   setTimeout(() => {
-    if (!isConnected) {
+    if (!isConnected && retryCount === 0) {
       console.log('🔄 Attempting to reconnect...');
       connectDB();
     }
@@ -204,7 +201,7 @@ const initializeEmailTransporter = () => {
         pool: true,
         maxConnections: 5,
         maxMessages: 100,
-        rateLimit: 14 // messages per second
+        rateLimit: 14
       });
 
       // Verify email configuration
@@ -408,12 +405,11 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-// Enhanced Registration Endpoint
+// Registration Endpoint
 app.post('/register', checkDBConnection, async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Validate input
     if (!email || !password) {
       return res.status(400).json({ 
         success: false,
@@ -422,7 +418,6 @@ app.post('/register', checkDBConnection, async (req, res) => {
       });
     }
 
-    // Email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -432,7 +427,6 @@ app.post('/register', checkDBConnection, async (req, res) => {
       });
     }
 
-    // Password validation
     if (password.length < 8) {
       return res.status(400).json({
         success: false,
@@ -441,7 +435,6 @@ app.post('/register', checkDBConnection, async (req, res) => {
       });
     }
 
-    // Check for existing user with timeout
     const existingUser = await User.findOne({ email: email.toLowerCase() })
       .maxTimeMS(10000)
       .lean();
@@ -454,11 +447,9 @@ app.post('/register', checkDBConnection, async (req, res) => {
       });
     }
 
-    // Hash password
     const saltRounds = 12;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create user
     const user = new User({ 
       email: email.toLowerCase(), 
       password: hashedPassword 
@@ -466,14 +457,12 @@ app.post('/register', checkDBConnection, async (req, res) => {
     
     await user.save();
 
-    // Generate token with longer expiration
     const token = jwt.sign(
       { _id: user._id, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
 
-    // Update last login
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
     res.status(201).json({
@@ -498,23 +487,6 @@ app.post('/register', checkDBConnection, async (req, res) => {
       });
     }
     
-    if (error.name === 'ValidationError') {
-      const message = Object.values(error.errors).map(e => e.message).join(', ');
-      return res.status(400).json({
-        success: false,
-        error: message,
-        code: 'VALIDATION_ERROR'
-      });
-    }
-    
-    if (error.name === 'MongooseError' || error.name === 'MongoTimeoutError') {
-      return res.status(503).json({
-        success: false,
-        error: 'Database operation timed out',
-        code: 'DB_TIMEOUT'
-      });
-    }
-    
     res.status(500).json({
       success: false,
       error: 'Registration failed',
@@ -523,7 +495,7 @@ app.post('/register', checkDBConnection, async (req, res) => {
   }
 });
 
-// Enhanced Login Endpoint
+// Login Endpoint
 app.post('/login', checkDBConnection, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -536,7 +508,6 @@ app.post('/login', checkDBConnection, async (req, res) => {
       });
     }
 
-    // Find user with timeout
     const user = await User.findOne({ 
       email: email.toLowerCase(),
       isActive: true 
@@ -550,7 +521,6 @@ app.post('/login', checkDBConnection, async (req, res) => {
       });
     }
 
-    // Check password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ 
@@ -560,14 +530,12 @@ app.post('/login', checkDBConnection, async (req, res) => {
       });
     }
 
-    // Generate token
     const token = jwt.sign(
       { _id: user._id, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
 
-    // Update last login
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
     res.json({ 
@@ -583,15 +551,6 @@ app.post('/login', checkDBConnection, async (req, res) => {
 
   } catch (err) {
     console.error('Login error:', err);
-    
-    if (err.name === 'MongooseError' || err.name === 'MongoTimeoutError') {
-      return res.status(503).json({
-        success: false,
-        error: 'Database temporarily unavailable',
-        code: 'DB_TIMEOUT'
-      });
-    }
-    
     res.status(500).json({ 
       success: false,
       error: 'Login failed',
@@ -600,7 +559,7 @@ app.post('/login', checkDBConnection, async (req, res) => {
   }
 });
 
-// Enhanced Product Endpoints
+// Product Endpoints
 app.get('/products', authenticate, checkDBConnection, async (req, res) => {
   try {
     const products = await Product.find({ 
@@ -611,11 +570,7 @@ app.get('/products', authenticate, checkDBConnection, async (req, res) => {
     .maxTimeMS(10000)
     .lean();
     
-    res.json({
-      success: true,
-      count: products.length,
-      products
-    });
+    res.json(products);
   } catch (err) {
     console.error('Get products error:', err);
     res.status(500).json({ 
@@ -635,7 +590,6 @@ app.get('/products/sorted', authenticate, checkDBConnection, async (req, res) =>
     .maxTimeMS(10000)
     .lean();
     
-    // Enhanced sorting: target reached first, then by price drop percentage
     const sortedProducts = products.sort((a, b) => {
       const aReached = a.currentPrice <= a.targetPrice;
       const bReached = b.currentPrice <= b.targetPrice;
@@ -643,17 +597,12 @@ app.get('/products/sorted', authenticate, checkDBConnection, async (req, res) =>
       if (aReached && !bReached) return -1;
       if (!aReached && bReached) return 1;
       
-      // Both reached or both not reached - sort by price drop percentage
       const aDrop = (a.currentPrice - a.targetPrice) / a.targetPrice;
       const bDrop = (b.currentPrice - b.targetPrice) / b.targetPrice;
       return aDrop - bDrop;
     });
     
-    res.json({
-      success: true,
-      count: sortedProducts.length,
-      products: sortedProducts
-    });
+    res.json(sortedProducts);
   } catch (err) {
     console.error('Get sorted products error:', err);
     res.status(500).json({ 
@@ -668,7 +617,6 @@ app.post('/track-product', authenticate, checkDBConnection, async (req, res) => 
   try {
     const { productName, productUrl, productImage, currentPrice, targetPrice, store } = req.body;
 
-    // Validation
     if (!productName || !productUrl || !currentPrice || !targetPrice) {
       return res.status(400).json({
         success: false,
@@ -693,7 +641,6 @@ app.post('/track-product', authenticate, checkDBConnection, async (req, res) => 
       });
     }
 
-    // Check if user already tracking this product
     const existingProduct = await Product.findOne({
       userId: req.user._id,
       productUrl: productUrl,
@@ -708,7 +655,6 @@ app.post('/track-product', authenticate, checkDBConnection, async (req, res) => 
       });
     }
 
-    // Check user's product limit (e.g., 100 products)
     const userProductCount = await Product.countDocuments({
       userId: req.user._id,
       isActive: true
@@ -734,7 +680,6 @@ app.post('/track-product', authenticate, checkDBConnection, async (req, res) => 
 
     await product.save();
 
-    // Create initial price history entry
     const priceHistory = new PriceHistory({
       productId: product._id,
       price: product.currentPrice
@@ -754,16 +699,6 @@ app.post('/track-product', authenticate, checkDBConnection, async (req, res) => 
     });
   } catch (err) {
     console.error('Track product error:', err);
-    
-    if (err.name === 'ValidationError') {
-      const message = Object.values(err.errors).map(e => e.message).join(', ');
-      return res.status(400).json({
-        success: false,
-        error: message,
-        code: 'VALIDATION_ERROR'
-      });
-    }
-    
     res.status(500).json({ 
       success: false,
       error: 'Failed to track product',
@@ -772,7 +707,7 @@ app.post('/track-product', authenticate, checkDBConnection, async (req, res) => 
   }
 });
 
-// Enhanced email service
+// Email and other endpoints (keeping them as they were)
 app.post('/send-price-alert', authenticate, async (req, res) => {
   try {
     if (!transporter) {
@@ -799,12 +734,7 @@ app.post('/send-price-alert', authenticate, async (req, res) => {
       subject,
       text,
       html: html || text,
-      priority: 'high',
-      headers: {
-        'X-Priority': '1',
-        'X-MSMail-Priority': 'High',
-        'Importance': 'high'
-      }
+      priority: 'high'
     };
 
     await transporter.sendMail(mailOptions);
@@ -818,8 +748,7 @@ app.post('/send-price-alert', authenticate, async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Failed to send email',
-      code: 'EMAIL_FAILED',
-      details: error.message
+      code: 'EMAIL_FAILED'
     });
   }
 });
@@ -840,11 +769,7 @@ app.get('/products/pending-notifications', authenticate, checkDBConnection, asyn
       }
     ]).maxTimeMS(10000);
     
-    res.json({
-      success: true,
-      count: products.length,
-      products
-    });
+    res.json(products);
   } catch (err) {
     console.error('Get pending notifications error:', err);
     res.status(500).json({ 
@@ -855,13 +780,11 @@ app.get('/products/pending-notifications', authenticate, checkDBConnection, asyn
   }
 });
 
-// Update product price with enhanced validation
 app.patch('/product/:id', authenticate, checkDBConnection, async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = { ...req.body };
 
-    // Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -870,11 +793,7 @@ app.patch('/product/:id', authenticate, checkDBConnection, async (req, res) => {
       });
     }
 
-    // Add metadata
     updateData.lastChecked = new Date();
-    if (updateData.currentPrice) {
-      updateData.checkCount = { $inc: { checkCount: 1 } };
-    }
     
     const product = await Product.findOneAndUpdate(
       { _id: id, userId: req.user._id, isActive: true },
@@ -890,22 +809,9 @@ app.patch('/product/:id', authenticate, checkDBConnection, async (req, res) => {
       });
     }
 
-    res.json({
-      success: true,
-      message: 'Product updated successfully',
-      product
-    });
+    res.json(product);
   } catch (err) {
     console.error('Update product error:', err);
-    
-    if (err.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid update data',
-        code: 'VALIDATION_ERROR'
-      });
-    }
-    
     res.status(500).json({ 
       success: false,
       error: 'Failed to update product',
@@ -914,7 +820,6 @@ app.patch('/product/:id', authenticate, checkDBConnection, async (req, res) => {
   }
 });
 
-// Enhanced delete product
 app.delete('/product/:id', authenticate, checkDBConnection, async (req, res) => {
   try {
     const { id } = req.params;
@@ -941,7 +846,6 @@ app.delete('/product/:id', authenticate, checkDBConnection, async (req, res) => 
       });
     }
 
-    // Optionally delete price history
     await PriceHistory.deleteMany({ productId: id });
 
     res.json({ 
@@ -958,7 +862,6 @@ app.delete('/product/:id', authenticate, checkDBConnection, async (req, res) => 
   }
 });
 
-// Price history endpoints
 app.post('/price-history', authenticate, checkDBConnection, async (req, res) => {
   try {
     const { productId, price } = req.body;
@@ -971,7 +874,6 @@ app.post('/price-history', authenticate, checkDBConnection, async (req, res) => 
       });
     }
 
-    // Verify product belongs to user
     const product = await Product.findOne({
       _id: productId,
       userId: req.user._id,
@@ -993,11 +895,7 @@ app.post('/price-history', authenticate, checkDBConnection, async (req, res) => 
     
     await history.save();
     
-    res.status(201).json({
-      success: true,
-      message: 'Price history saved',
-      history
-    });
+    res.status(201).json(history);
   } catch (err) {
     console.error('Save price history error:', err);
     res.status(500).json({ 
@@ -1012,7 +910,6 @@ app.get('/price-history/:productId', authenticate, checkDBConnection, async (req
   try {
     const { productId } = req.params;
 
-    // Verify product belongs to user
     const product = await Product.findOne({
       _id: productId,
       userId: req.user._id
@@ -1031,11 +928,7 @@ app.get('/price-history/:productId', authenticate, checkDBConnection, async (req
       .limit(100)
       .lean();
       
-    res.json({
-      success: true,
-      count: history.length,
-      history
-    });
+    res.json(history);
   } catch (err) {
     console.error('Get price history error:', err);
     res.status(500).json({ 
@@ -1046,43 +939,10 @@ app.get('/price-history/:productId', authenticate, checkDBConnection, async (req
   }
 });
 
-// Admin/Analytics endpoints (optional)
-app.get('/stats', authenticate, checkDBConnection, async (req, res) => {
-  try {
-    const userId = req.user._id;
-    
-    const stats = await Promise.all([
-      Product.countDocuments({ userId, isActive: true }),
-      Product.countDocuments({ userId, isActive: true, $expr: { $lte: ['$currentPrice', '$targetPrice'] } }),
-      Product.aggregate([
-        { $match: { userId, isActive: true } },
-        { $group: { _id: null, avgSavings: { $avg: { $subtract: ['$currentPrice', '$targetPrice'] } } } }
-      ])
-    ]);
-
-    res.json({
-      success: true,
-      stats: {
-        totalProducts: stats[0],
-        targetsReached: stats[1],
-        averageSavings: stats[2][0]?.avgSavings || 0
-      }
-    });
-  } catch (err) {
-    console.error('Get stats error:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch statistics',
-      code: 'SERVER_ERROR'
-    });
-  }
-});
-
 // Global Error Handling Middleware
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   
-  // Don't leak error details in production
   const isDevelopment = process.env.NODE_ENV === 'development';
   
   res.status(err.status || 500).json({ 
@@ -1117,15 +977,9 @@ const startServer = () => {
 // Initialize services and start server
 const initialize = async () => {
   try {
-    // Initialize email first (non-blocking)
     initializeEmailTransporter();
-    
-    // Start server immediately (database will connect in background)
     startServer();
-    
-    // Connect to database
     await connectDB();
-    
     console.log('🎉 Application initialization completed');
   } catch (error) {
     console.error('💥 Application initialization failed:', error);
@@ -1133,5 +987,4 @@ const initialize = async () => {
   }
 };
 
-// Start the application
 initialize();
