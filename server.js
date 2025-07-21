@@ -6,6 +6,8 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
+const cheerio = require('cheerio');
+const axios = require('axios');
 
 const app = express();
 
@@ -19,16 +21,14 @@ app.use(cors({
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // Increased limit for extension usage
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
   message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 app.use(limiter);
-
-// Body parser with increased limit
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -46,7 +46,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// MongoDB Connection with Fixed Options
+// MongoDB Connection
 const MAX_RETRIES = 3;
 let retryCount = 0;
 let isConnected = false;
@@ -59,7 +59,6 @@ const connectDB = async () => {
       throw new Error('MONGODB_URI environment variable is not set');
     }
 
-    // FIXED: Removed unsupported options
     const options = {
       useNewUrlParser: true,
       useUnifiedTopology: true,
@@ -71,7 +70,6 @@ const connectDB = async () => {
       connectTimeoutMS: 30000,
       heartbeatFrequencyMS: 10000,
       maxIdleTimeMS: 30000
-      // REMOVED: bufferCommands, bufferMaxEntries (these are not valid connection options)
     };
 
     await mongoose.connect(process.env.MONGODB_URI, options);
@@ -80,7 +78,6 @@ const connectDB = async () => {
     isConnected = true;
     retryCount = 0;
     
-    // Test the connection
     await mongoose.connection.db.admin().ping();
     console.log('✅ MongoDB ping successful');
     
@@ -114,20 +111,12 @@ mongoose.connection.on('disconnected', () => {
   console.log('🟡 Mongoose disconnected');
   isConnected = false;
   
-  // Attempt to reconnect after disconnection
   setTimeout(() => {
     if (!isConnected && retryCount === 0) {
       console.log('🔄 Attempting to reconnect...');
       connectDB();
     }
   }, 5000);
-});
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('🛑 Received SIGINT. Graceful shutdown...');
-  await mongoose.connection.close();
-  process.exit(0);
 });
 
 // Database health check middleware
@@ -143,7 +132,7 @@ const checkDBConnection = (req, res, next) => {
   next();
 };
 
-// Enhanced Health Check Endpoint
+// Health Check Endpoint
 app.get('/health', async (req, res) => {
   const healthCheck = {
     status: 'OK',
@@ -169,7 +158,6 @@ app.get('/health', async (req, res) => {
       };
     }
 
-    // Check email service
     if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
       healthCheck.email = { status: 'configured' };
     } else {
@@ -186,11 +174,12 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Configure email transporter with better error handling
+// Email transporter
+let transporter = null;
+
 const initializeEmailTransporter = () => {
   try {
     if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-      // FIXED: Changed createTransporter to createTransport
       transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: {
@@ -203,7 +192,6 @@ const initializeEmailTransporter = () => {
         rateLimit: 14
       });
 
-      // Verify email configuration
       transporter.verify((error, success) => {
         if (error) {
           console.error('❌ Email configuration error:', error);
@@ -221,7 +209,266 @@ const initializeEmailTransporter = () => {
   }
 };
 
-// Enhanced Models with better validation
+// SERVER-SIDE PRICE SCRAPING SYSTEM
+const serverScrapers = {
+  'hm.com': async (html, url) => {
+    const $ = cheerio.load(html);
+    try {
+      const title = $('.product-item-headline').text().trim() || 
+                   $('.ProductName-module--productItemHeadline__3Gzt1').text().trim() ||
+                   $('h1[data-testid="product-name"]').text().trim() ||
+                   $('h1').first().text().trim();
+      
+      let price = null;
+      const priceSelectors = ['.price-value', '.ProductPrice-module--price__1PZ8p', '[data-testid="price-value"]'];
+      
+      for (const selector of priceSelectors) {
+        const priceText = $(selector).text().replace(/[€$£¥₹]/g, '').replace(/[,\s]/g, '').trim();
+        const priceMatch = priceText.match(/(\d+(?:[.,]\d{2})?)/);
+        if (priceMatch) {
+          price = parseFloat(priceMatch[1].replace(',', '.'));
+          break;
+        }
+      }
+      
+      const image = $('.product-detail-main-image').attr('src') || 
+                   $('meta[property="og:image"]').attr('content');
+      
+      return { title: title || null, price: price || null, image: image || null, store: 'H&M' };
+    } catch (e) {
+      console.error('H&M server scraper error:', e);
+      return { title: null, price: null, image: null, store: 'H&M' };
+    }
+  },
+
+  'zara.com': async (html, url) => {
+    const $ = cheerio.load(html);
+    try {
+      const title = $('.product-detail-info__header-name').text().trim() ||
+                   $('.product-detail-info__name').text().trim() ||
+                   $('h1[data-testid="product-name"]').text().trim();
+      
+      let price = null;
+      const priceSelectors = ['.money-amount__main', '.price-amount .money-amount__main'];
+      
+      for (const selector of priceSelectors) {
+        const priceText = $(selector).text().replace(/\s/g, '').replace(/EUR|€|\$/g, '').replace(',', '.');
+        const priceMatch = priceText.match(/(\d+(?:\.\d{2})?)/);
+        if (priceMatch) {
+          price = parseFloat(priceMatch[1]);
+          break;
+        }
+      }
+      
+      const image = $('.media-image__image').attr('src') || 
+                   $('meta[property="og:image"]').attr('content');
+      
+      return { title: title || null, price: price || null, image: image || null, store: 'Zara' };
+    } catch (e) {
+      console.error('Zara server scraper error:', e);
+      return { title: null, price: null, image: null, store: 'Zara' };
+    }
+  },
+
+  'mediamarkt.': async (html, url) => {
+    const $ = cheerio.load(html);
+    try {
+      const title = $('h1[data-test="product-title"]').text().trim() ||
+                   $('h1.pdp-product-name').text().trim() ||
+                   $('h1').first().text().trim();
+      
+      let price = null;
+      const whole = $('[data-test="branded-price-whole-value"]').text().replace(/[,\s]/g, '').trim();
+      const decimal = $('[data-test="branded-price-decimal-value"]').text().trim();
+      
+      if (whole && decimal) {
+        price = parseFloat(`${whole}.${decimal}`);
+      }
+      
+      const image = $('img[itemprop="image"]').attr('src') || 
+                   $('meta[property="og:image"]').attr('content');
+      
+      return { title: title || null, price: price || null, image: image || null, store: 'MediaMarkt' };
+    } catch (e) {
+      console.error('MediaMarkt server scraper error:', e);
+      return { title: null, price: null, image: null, store: 'MediaMarkt' };
+    }
+  },
+
+  'amazon.': async (html, url) => {
+    const $ = cheerio.load(html);
+    try {
+      const title = $('#productTitle').text().trim() ||
+                   $('.product-title').text().trim();
+      
+      let price = null;
+      const priceSelectors = ['.a-price-whole', '.a-offscreen', '#price_inside_buybox'];
+      
+      for (const selector of priceSelectors) {
+        const priceText = $(selector).text().replace(/[€$£,\s]/g, '').trim();
+        const priceMatch = priceText.match(/(\d+(?:\.\d{2})?)/);
+        if (priceMatch) {
+          price = parseFloat(priceMatch[1]);
+          break;
+        }
+      }
+      
+      const image = $('#landingImage').attr('src') || 
+                   $('meta[property="og:image"]').attr('content');
+      
+      return { title: title || null, price: price || null, image: image || null, store: 'Amazon' };
+    } catch (e) {
+      console.error('Amazon server scraper error:', e);
+      return { title: null, price: null, image: null, store: 'Amazon' };
+    }
+  },
+
+  'zalando.': async (html, url) => {
+    const $ = cheerio.load(html);
+    try {
+      const title = $('[data-testid="product-name"]').text().trim() ||
+                   $('.product-title').text().trim();
+      
+      let price = null;
+      const priceSelectors = ['[data-testid="price"]', '.price-current', '.product-price'];
+      
+      for (const selector of priceSelectors) {
+        const priceText = $(selector).text().replace(/[€$£,\s]/g, '').trim();
+        const priceMatch = priceText.match(/(\d+(?:\.\d{2})?)/);
+        if (priceMatch) {
+          price = parseFloat(priceMatch[1]);
+          break;
+        }
+      }
+      
+      const image = $('[data-testid="product-image"]').attr('src') || 
+                   $('meta[property="og:image"]').attr('content');
+      
+      return { title: title || null, price: price || null, image: image || null, store: 'Zalando' };
+    } catch (e) {
+      console.error('Zalando server scraper error:', e);
+      return { title: null, price: null, image: null, store: 'Zalando' };
+    }
+  }
+};
+
+// Fallback scraper
+const serverFallbackScraper = async (html, url) => {
+  const $ = cheerio.load(html);
+  try {
+    const title = $("meta[property='og:title']").attr('content') ||
+                 $("title").text() ||
+                 $("h1").first().text() || "";
+    
+    let price = null;
+    $('script[type="application/ld+json"]').each((i, script) => {
+      try {
+        const data = JSON.parse($(script).html());
+        const items = Array.isArray(data) ? data : [data];
+        
+        for (const item of items) {
+          if (item['@type'] === 'Product' && item.offers) {
+            const offers = Array.isArray(item.offers) ? item.offers : [item.offers];
+            for (const offer of offers) {
+              if (offer.price) {
+                price = parseFloat(offer.price);
+                return false;
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    });
+    
+    if (!price) {
+      const priceSelectors = [
+        '[class*="price"]:not([class*="strike"]):not([class*="old"])',
+        '[itemprop="price"]',
+        '[data-price]'
+      ];
+      
+      for (const selector of priceSelectors) {
+        const priceText = $(selector).first().text().replace(/[^0-9.,]/g, '').trim();
+        const priceMatch = priceText.match(/(\d+(?:[.,]\d{2})?)/);
+        if (priceMatch) {
+          price = parseFloat(priceMatch[1].replace(',', '.'));
+          if (price > 0.01 && price < 999999) break;
+        }
+      }
+    }
+    
+    const image = $("meta[property='og:image']").attr('content') ||
+                 $("img").first().attr('src') || "";
+    
+    const store = new URL(url).hostname.replace('www.', '').split('.')[0];
+    
+    return { title: title.trim() || null, price: price || null, image: image || null, store: store || null };
+  } catch (e) {
+    console.error('Fallback server scraper error:', e);
+    return { title: null, price: null, image: null, store: null };
+  }
+};
+
+// Main server-side price checking function
+async function checkProductPriceServer(productUrl) {
+  try {
+    console.log(`🔍 Server checking price for: ${productUrl}`);
+    
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+    };
+
+    const response = await axios.get(productUrl, {
+      headers,
+      timeout: 30000,
+      maxRedirects: 5,
+      validateStatus: (status) => status < 400
+    });
+
+    if (!response.data) {
+      throw new Error('No content received');
+    }
+
+    const html = response.data;
+    const domain = new URL(productUrl).hostname.replace('www.', '');
+    
+    let productInfo = null;
+    for (const [key, scraper] of Object.entries(serverScrapers)) {
+      if (domain.includes(key)) {
+        console.log(`📦 Using ${key} server scraper`);
+        productInfo = await scraper(html, productUrl);
+        if (productInfo.price) break;
+      }
+    }
+    
+    if (!productInfo || !productInfo.price) {
+      console.log('📦 Using fallback server scraper');
+      productInfo = await serverFallbackScraper(html, productUrl);
+    }
+    
+    if (productInfo.price) {
+      productInfo.price = parseFloat(productInfo.price);
+      if (isNaN(productInfo.price) || productInfo.price <= 0) {
+        productInfo.price = null;
+      }
+    }
+    
+    console.log(`✅ Server price check result:`, productInfo);
+    return productInfo;
+    
+  } catch (error) {
+    console.error(`❌ Server price check failed for ${productUrl}:`, error.message);
+    return { title: null, price: null, image: null, store: null, error: error.message };
+  }
+}
+
+// Models
 const userSchema = new mongoose.Schema({
   email: {
     type: String,
@@ -320,7 +567,6 @@ const productSchema = new mongoose.Schema({
   }
 });
 
-// Price history schema
 const priceHistorySchema = new mongoose.Schema({
   productId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -340,12 +586,11 @@ const priceHistorySchema = new mongoose.Schema({
   }
 });
 
-// Create models
 const User = mongoose.model('User', userSchema);
 const Product = mongoose.model('Product', productSchema);
 const PriceHistory = mongoose.model('PriceHistory', priceHistorySchema);
 
-// Enhanced Auth Middleware
+// Auth Middleware
 const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.header('Authorization');
@@ -404,7 +649,7 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-// Registration Endpoint
+// Auth Endpoints
 app.post('/register', checkDBConnection, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -494,7 +739,6 @@ app.post('/register', checkDBConnection, async (req, res) => {
   }
 });
 
-// Login Endpoint
 app.post('/login', checkDBConnection, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -553,6 +797,46 @@ app.post('/login', checkDBConnection, async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Login failed',
+      code: 'SERVER_ERROR'
+    });
+  }
+});
+
+// Server-side price checking endpoint
+app.post('/check-price', authenticate, async (req, res) => {
+  try {
+    const { url } = req.body;
+    
+    if (!url) {
+      return res.status(400).json({
+        success: false,
+        error: 'URL is required',
+        code: 'MISSING_URL'
+      });
+    }
+    
+    try {
+      new URL(url);
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid URL format',
+        code: 'INVALID_URL'
+      });
+    }
+    
+    const productInfo = await checkProductPriceServer(url);
+    
+    res.json({
+      success: true,
+      data: productInfo
+    });
+    
+  } catch (error) {
+    console.error('Price check endpoint error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check price',
       code: 'SERVER_ERROR'
     });
   }
@@ -706,7 +990,7 @@ app.post('/track-product', authenticate, checkDBConnection, async (req, res) => 
   }
 });
 
-// Email and other endpoints (keeping them as they were)
+// Email service
 app.post('/send-price-alert', authenticate, async (req, res) => {
   try {
     if (!transporter) {
@@ -938,7 +1222,96 @@ app.get('/price-history/:productId', authenticate, checkDBConnection, async (req
   }
 });
 
-// Global Error Handling Middleware
+// BACKGROUND PRICE CHECKING SYSTEM
+async function performBackgroundPriceChecks() {
+  try {
+    const products = await Product.find({ 
+      isActive: true,
+      lastChecked: { $lt: new Date(Date.now() - 8 * 60 * 1000) }
+    }).limit(50);
+    
+    console.log(`🔄 Background checking ${products.length} products server-side`);
+    
+    for (const product of products) {
+      try {
+        const result = await checkProductPriceServer(product.productUrl);
+        
+        if (result.price && !result.error) {
+          const oldPrice = product.currentPrice;
+          const newPrice = result.price;
+          const priceChanged = Math.abs(oldPrice - newPrice) > 0.01;
+          const targetReached = newPrice <= product.targetPrice;
+          
+          await Product.findByIdAndUpdate(product._id, {
+            currentPrice: newPrice,
+            lastChecked: new Date(),
+            $inc: { checkCount: 1 }
+          });
+          
+          if (priceChanged) {
+            await PriceHistory.create({
+              productId: product._id,
+              price: newPrice
+            });
+            
+            console.log(`💰 Price updated for ${product.productName}: €${oldPrice} → €${newPrice}`);
+          }
+          
+          if (targetReached && !product.notificationSent) {
+            const user = await User.findById(product.userId);
+            if (user && transporter) {
+              try {
+                await transporter.sendMail({
+                  from: `"Price Tracker" <${process.env.EMAIL_USER}>`,
+                  to: user.email,
+                  subject: `🎯 Price Alert: ${product.productName}`,
+                  html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                      <h2 style="color: #10b981;">🎉 Your target price has been reached!</h2>
+                      <p><strong>${product.productName}</strong></p>
+                      <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                        <p style="margin: 5px 0;"><strong>Current Price:</strong> <span style="color: #10b981; font-size: 18px; font-weight: bold;">€${newPrice.toFixed(2)}</span></p>
+                        <p style="margin: 5px 0;"><strong>Your Target:</strong> €${product.targetPrice.toFixed(2)}</p>
+                        <p style="margin: 5px 0;"><strong>You save:</strong> <span style="color: #10b981;">€${(product.targetPrice - newPrice).toFixed(2)}</span></p>
+                      </div>
+                      <p><a href="${product.productUrl}" style="background: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">View Product</a></p>
+                      <p style="color: #6b7280; font-size: 14px;">Happy shopping! 🛍️</p>
+                    </div>
+                  `
+                });
+                
+                console.log(`📧 Email sent to ${user.email} for ${product.productName}`);
+              } catch (emailError) {
+                console.error('Email sending error:', emailError);
+              }
+            }
+            
+            await Product.findByIdAndUpdate(product._id, { notificationSent: true });
+          }
+        } else {
+          console.warn(`⚠️ Failed to get price for ${product.productName}: ${result.error || 'Unknown error'}`);
+          
+          await Product.findByIdAndUpdate(product._id, {
+            lastChecked: new Date(),
+            $inc: { checkCount: 1 }
+          });
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+      } catch (error) {
+        console.error(`Error checking ${product.productName}:`, error);
+      }
+    }
+    
+    console.log(`✅ Background price check completed for ${products.length} products`);
+    
+  } catch (error) {
+    console.error('Background price check error:', error);
+  }
+}
+
+// Error Handling
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   
@@ -952,7 +1325,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 Handler
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
@@ -970,16 +1342,24 @@ const startServer = () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`⏰ Started at: ${new Date().toISOString()}`);
+    console.log(`🔍 Server-side price checking enabled!`);
   });
 };
 
-// Initialize services and start server
 const initialize = async () => {
   try {
     initializeEmailTransporter();
     startServer();
     await connectDB();
+    
     console.log('🎉 Application initialization completed');
+    
+    setTimeout(() => {
+      console.log('🚀 Starting background price checking system...');
+      performBackgroundPriceChecks();
+      setInterval(performBackgroundPriceChecks, 15 * 60 * 1000);
+    }, 2 * 60 * 1000);
+    
   } catch (error) {
     console.error('💥 Application initialization failed:', error);
     process.exit(1);
@@ -987,3 +1367,9 @@ const initialize = async () => {
 };
 
 initialize();
+
+module.exports = { 
+  checkProductPriceServer, 
+  performBackgroundPriceChecks,
+  app 
+};
