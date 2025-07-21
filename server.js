@@ -1368,6 +1368,7 @@ const initialize = async () => {
 
 initialize();
 
+
 module.exports = { 
   checkProductPriceServer, 
   performBackgroundPriceChecks,
